@@ -29,6 +29,13 @@ full:[{label:'SEM JARDINEIRA'},{label:'JARDINEIRA CREME',key:'overalls_cream',id
 };
 const slots=['hat','top','bottom','full'],selected={hat:1,top:1,bottom:1,full:0},attached={},cache=new Map(),pending=new Map(),loader=new GLTFLoader();
 let renderer,scene,root,controls,camera,raf=0,auto=false,ready=false,visible=!document.hidden,revision=0,dragged=false;
+let mannequinBounds=null;
+const fitTargets={
+ hat:{width:.31,height:.105,center:.895,depth:.24,front:.055},
+ top:{width:.88,height:.325,center:.665,depth:.54,front:.04},
+ bottom:{width:.64,height:.455,center:.235,depth:.47,front:.035},
+ full:{width:.75,height:.76,center:.40,depth:.53,front:.035}
+};
 function status(s){el('message').textContent=s;el('message').hidden=!s}
 function send(type,data){if(parent!==window)parent.postMessage(Object.assign({source:'doth-fitting-room',type},data||{}),location.origin)}
 function option(slot){return options[slot][selected[slot]]}
@@ -39,21 +46,52 @@ function render(){raf=0;if(!visible||!ready)return;size();if(auto){root.rotation
 function cloneModel(source){const obj=source.clone(true);obj.traverse(child=>{if(child.isMesh){child.material=Array.isArray(child.material)?child.material.map(m=>m.clone()):child.material.clone();child.frustumCulled=false}});return obj}
 async function asset(key){if(cache.has(key))return cloneModel(cache.get(key));if(!pending.has(key)){pending.set(key,loader.loadAsync('assets/'+key+'.glb').then(g=>{cache.set(key,g.scene);pending.delete(key);return g.scene}).catch(e=>{pending.delete(key);throw e}))}return cloneModel(await pending.get(key))}
 function positionModel(obj,slot){
- const bounds=new THREE.Box3().setFromObject(obj),dimensions=bounds.getSize(new THREE.Vector3()),center=bounds.getCenter(new THREE.Vector3());if(!dimensions.y||!Number.isFinite(dimensions.y))throw Error('Geometria inválida');
- // Independent models have no shared skeleton; normalize by bounding box to a conceptual mannequin.
- const height={mannequin:4.7,hat:.65,top:1.62,bottom:2.26,full:3.57}[slot];
- const scale=height/dimensions.y;obj.scale.setScalar(scale);
- const y={mannequin:0,hat:2.30,top:.68,bottom:-1.15,full:-.17}[slot];
- obj.position.set(-center.x*scale,y-center.y*scale,-center.z*scale);
- if(slot==='hat')obj.position.z+=.13;
- if(slot==='top')obj.position.z+=.12;
- if(slot==='bottom'||slot==='full')obj.position.z+=.055;
- return obj
+ // The mannequin is the measuring reference. Garments are independently exported
+ // meshes without shared bones, so each region gets a consistent 3D envelope.
+ obj.updateMatrixWorld(true);
+ const sourceBox=new THREE.Box3().setFromObject(obj);
+ const sourceSize=sourceBox.getSize(new THREE.Vector3());
+ const sourceCenter=sourceBox.getCenter(new THREE.Vector3());
+ if(!sourceSize.y||!Number.isFinite(sourceSize.y))throw Error('Geometria GLB inválida');
+ if(slot==='mannequin'){
+  const s=4.7/sourceSize.y;
+  obj.scale.setScalar(s);
+  obj.position.set(-sourceCenter.x*s,-sourceCenter.y*s,-sourceCenter.z*s);
+  obj.updateMatrixWorld(true);
+  mannequinBounds=new THREE.Box3().setFromObject(obj);
+  return obj;
+ }
+ if(!mannequinBounds)throw Error('Manequim ainda não calibrado');
+ const body=mannequinBounds;
+ const bodySize=body.getSize(new THREE.Vector3());
+ const bodyCenter=body.getCenter(new THREE.Vector3());
+ const t=fitTargets[slot];
+ const height=bodySize.y*t.height, width=bodySize.x*t.width, depth=bodySize.z*t.depth;
+ // Separate horizontal/depth adjustment prevents a baggy original mesh from
+ // becoming giant just because its source GLB has a different bounding box.
+ let sx=width/Math.max(.0001,sourceSize.x);
+ let sy=height/sourceSize.y;
+ let sz=depth/Math.max(.0001,sourceSize.z);
+ // Preserve plausible proportions and cap severely flattened geometry.
+ sx=THREE.MathUtils.clamp(sx,sy*.65,sy*1.65);
+ sz=THREE.MathUtils.clamp(sz,sy*.65,sy*1.65);
+ obj.scale.set(sx,sy,sz);
+ const y=body.min.y+bodySize.y*t.center;
+ obj.position.set(
+   bodyCenter.x-sourceCenter.x*sx,
+   y-sourceCenter.y*sy,
+   bodyCenter.z-sourceCenter.z*sz+bodySize.z*t.front
+ );
+ // A leopard cap was exported facing backwards in its original local space.
+ if(slot==='hat'&&obj.userData.dothKey==='cap_leopard'){
+   obj.rotation.y=Math.PI;
+ }
+ return obj;
 }
 function disposeClone(obj){if(!obj)return;obj.traverse(c=>{if(c.isMesh){const mats=Array.isArray(c.material)?c.material:[c.material];mats.forEach(m=>m.dispose())}});root.remove(obj)}
 async function put(slot,stamp){
  const a=option(slot);disposeClone(attached[slot]);attached[slot]=null;requestDraw();
- if(!a.key)return;try{const obj=positionModel(await asset(a.key),slot);if(stamp!==revision){disposeClone(obj);return}
+ if(!a.key)return;try{const obj=await asset(a.key);obj.userData.dothKey=a.key;positionModel(obj,slot);if(stamp!==revision){disposeClone(obj);return}
   if(a.mono)obj.traverse(c=>{if(c.isMesh){const materials=Array.isArray(c.material)?c.material:[c.material];materials.forEach(m=>{m.color.set('#dedede');if(m.map){m.map=m.map.clone();m.map.colorSpace=THREE.SRGBColorSpace;/* monochrome effect is approximate */}m.needsUpdate=true})}});
   attached[slot]=obj;root.add(obj);status('');requestDraw();
  }catch(err){console.error('DOTH GLB',a.key,err);status('MODELO '+a.key+' NÃO CARREGOU');}
