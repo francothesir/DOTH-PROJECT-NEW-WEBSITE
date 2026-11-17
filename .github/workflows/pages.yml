@@ -1,0 +1,48 @@
+name: Publish DOTH website
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install model processing tools
+        run: pip install -r requirements.txt
+      - name: Download original DOTH GLBs from public Drive folder
+        run: python scripts/download_models.py
+      - name: Optimize 3D assets for web
+        run: python scripts/optimize_models.py
+      - name: Render catalogue previews with correct front orientation
+        run: python scripts/render_previews.py
+      - name: Assemble public site
+        run: |
+          mkdir -p public
+          cp index.html gallery3d.js .nojekyll public/
+          cp -r assets public/assets
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
