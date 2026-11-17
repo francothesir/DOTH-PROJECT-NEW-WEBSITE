@@ -30,7 +30,7 @@ jobs:
       - name: Assemble public site
         run: |
           mkdir -p public
-          cp index.html gallery3d.js public/
+          cp index.html gallery3d.js fitting-room.html public/
           touch public/.nojekyll
           cp -r assets public/assets
       - uses: actions/configure-pages@v5
