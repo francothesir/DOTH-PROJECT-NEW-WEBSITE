@@ -29,7 +29,38 @@ full:[{label:'SEM JARDINEIRA'},{label:'JARDINEIRA CREME',key:'overalls_cream',id
 };
 const slots=['hat','top','bottom','full'],selected={hat:1,top:1,bottom:1,full:0},attached={},cache=new Map(),pending=new Map(),loader=new GLTFLoader();
 let renderer,scene,root,controls,camera,raf=0,auto=false,ready=false,visible=!document.hidden,revision=0,dragged=false;
-let mannequinBounds=null;
+let mannequinBounds=null,headBounds=null;
+// Amostra a geometria original do manequim na região superior, evitando usar
+// a largura dos ombros/corpo para dimensionar bonés.
+function measureHead(mannequin){
+ const full=mannequinBounds, height=full.max.y-full.min.y;
+ const bands=[[.88,.965],[.86,.96],[.84,.98]];
+ mannequin.updateMatrixWorld(true);
+ for(const [from,to] of bands){
+  const b=new THREE.Box3(), point=new THREE.Vector3();
+  let count=0;
+  mannequin.traverse(mesh=>{
+   if(!mesh.isMesh||!mesh.geometry?.attributes?.position)return;
+   const attr=mesh.geometry.attributes.position;
+   const stride=Math.max(1,Math.floor(attr.count/30000));
+   for(let i=0;i<attr.count;i+=stride){
+    point.fromBufferAttribute(attr,i).applyMatrix4(mesh.matrixWorld);
+    const fraction=(point.y-full.min.y)/height;
+    if(fraction>=from&&fraction<=to){b.expandByPoint(point);count++}
+   }
+  });
+  const dims=b.getSize(new THREE.Vector3());
+  if(count>30&&dims.x>height*.045&&dims.x<height*.32&&dims.z>height*.025){
+   return b;
+  }
+ }
+ // Fallback conservador se a cabeça tiver topologia/altura incomum.
+ const c=full.getCenter(new THREE.Vector3());
+ return new THREE.Box3(
+  new THREE.Vector3(c.x-height*.078,full.min.y+height*.86,c.z-height*.067),
+  new THREE.Vector3(c.x+height*.078,full.min.y+height*.98,c.z+height*.067)
+ );
+}
 // Measured against the original 8 GLBs from the DOTH Drive folder.
 // s is a UNIFORM scalar: all original angles, seams, proportions and topology are preserved.
 // y is the lower edge of the object as a fraction of the mannequin's height.
@@ -42,10 +73,10 @@ const garmentFit={
  pants_cargo:{s:.56,y:0,z:0},
  pants_black:{s:.53,y:.005,z:0},
  overalls_cream:{s:.82,y:.022,z:.005},
- // Crown close to the mannequin's skull; original brim shape is untouched.
- cap_camo:{s:.158,y:.897,z:.006},
- cap_plaid:{s:.17,y:.898,z:.006},
- cap_leopard:{s:.175,y:.901,z:.006,turn:Math.PI}
+ // Cap calibration now uses the measured head silhouette, not guessed mannequin-height multipliers.
+ cap_camo:{turn:0,width:1.19,front:.07},
+ cap_plaid:{turn:0,width:1.19,front:.07},
+ cap_leopard:{turn:Math.PI,width:1.19,front:.07}
 };
 function status(s){el('message').textContent=s;el('message').hidden=!s}
 function send(type,data){if(parent!==window)parent.postMessage(Object.assign({source:'doth-fitting-room',type},data||{}),location.origin)}
@@ -68,11 +99,31 @@ function positionModel(obj,slot){
   obj.position.set(-center.x*uniform,-center.y*uniform,-center.z*uniform);
   obj.updateMatrixWorld(true);
   mannequinBounds=new THREE.Box3().setFromObject(obj);
+  headBounds=measureHead(obj);
   return obj;
  }
  if(!mannequinBounds)throw Error('Manequim precisa carregar antes da roupa');
  const key=obj.userData.dothKey,fit=garmentFit[key];
  if(!fit)throw Error('Calibração ausente para '+key);
+ if(slot==='hat'){
+  // A largura da cabeça dirige o ajuste; um único escalar preserva o corte original.
+  const headSize=headBounds.getSize(new THREE.Vector3());
+  const headCenter=headBounds.getCenter(new THREE.Vector3());
+  const capWidth=Math.max(size.x,size.z*.001);
+  const scale=headSize.x*fit.width/capWidth;
+  obj.scale.setScalar(scale);
+  obj.rotation.y=fit.turn||0;
+  obj.updateMatrixWorld(true);
+  // Bounding box pós-rotação: inclui corretamente a aba voltada para a frente.
+  const capBox=new THREE.Box3().setFromObject(obj);
+  const capCenter=capBox.getCenter(new THREE.Vector3());
+  const height=mannequinBounds.max.y-mannequinBounds.min.y;
+  obj.position.x+=headCenter.x-capCenter.x;
+  obj.position.z+=headCenter.z+headSize.z*fit.front-capCenter.z;
+  // Coroa apenas acima do topo da cabeça; a aba se estende naturalmente à frente.
+  obj.position.y+=mannequinBounds.max.y+height*.009-capBox.max.y;
+  return obj;
+ }
  const bodySize=mannequinBounds.getSize(new THREE.Vector3());
  const bodyCenter=mannequinBounds.getCenter(new THREE.Vector3());
  const uniform=bodySize.y/SOURCE_MANNEQUIN_HEIGHT*fit.s;
