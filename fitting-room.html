@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>DOTH® — Provador 3D Interativo</title>
+<style>
+:root{--paper:#e4e3dc;--ink:#171918;--accent:#c8fa4d}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--paper);color:var(--ink);font-family:Arial,Helvetica,sans-serif}button{cursor:pointer;color:inherit;font:inherit}button:focus-visible{outline:3px solid #627c21;outline-offset:3px}
+#scene{position:absolute;inset:0;cursor:grab;touch-action:none}#scene:active{cursor:grabbing}#scene canvas{display:block;width:100%;height:100%}
+#ui{position:absolute;inset:0;pointer-events:none}#title{position:absolute;top:18px;left:20px;font-size:27px;letter-spacing:-.1em;font-weight:800}#edition{position:absolute;top:51px;left:20px;font:10px monospace;letter-spacing:.04em}#badge{position:absolute;right:18px;top:18px;border:1px solid #5558;background:#e4e3dccc;padding:9px;font:10px monospace}#message{position:absolute;top:78px;left:50%;transform:translateX(-50%);max-width:90%;padding:10px 13px;background:#171918;color:white;font:10px monospace;text-align:center;white-space:normal;z-index:7}#message[hidden]{display:none}
+#selectors{position:absolute;bottom:17px;left:50%;transform:translateX(-50%);width:min(700px,calc(100% - 24px));display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;pointer-events:auto} .item{border:1px solid #17191864;background:#e4e3dce8;backdrop-filter:blur(8px);padding:11px 8px;min-width:0}.type{font:10px monospace;color:#65665c;margin-bottom:8px}.switch{display:flex;align-items:center;gap:4px;justify-content:space-between}.switch button{width:29px;height:31px;border:1px solid #17191858;background:transparent;flex:none;font-size:18px}.switch button:hover{background:var(--accent)}.name{font-size:11px;font-weight:bold;line-height:1.2;text-align:center;overflow-wrap:anywhere;min-width:0}.ref{font:8px monospace;margin-top:5px;color:#666}
+#camera{position:absolute;top:50%;right:13px;transform:translateY(-50%);pointer-events:auto;display:grid;gap:6px}#camera button{width:39px;height:39px;border:1px solid #17191866;background:#e4e3dce8;font-size:19px}#camera button:hover,#camera button.active{background:var(--accent)}#help{position:absolute;left:20px;bottom:133px;font:10px monospace;color:#555}
+#fallback{position:absolute;inset:0;background:var(--paper);display:none;align-items:center;justify-content:center;flex-direction:column;text-align:center;padding:25px;gap:15px}#fallback img{height:min(65vh,560px);max-width:80vw;object-fit:contain}#fallback p{max-width:420px;font:13px/1.6 Arial}
+@media(max-width:580px){#title{top:10px;left:11px;font-size:23px}#edition{top:39px;left:11px;font-size:8px}#badge{right:8px;top:10px;font-size:8px;padding:7px}#message{top:64px;font-size:9px}#selectors{bottom:8px;width:calc(100% - 10px);gap:3px}.item{padding:7px 3px}.type{font-size:8px}.name{font-size:9px}.switch{gap:1px}.switch button{width:22px;height:29px}.ref{font-size:7px}#help{left:10px;bottom:106px;font-size:8px}#camera{top:44%;right:7px}#camera button{height:31px;width:31px;font-size:17px}}
+</style>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+</head><body>
+<div id="scene" aria-label="Manequim DOTH em 360 graus: arraste para girar"></div><div id="fallback"><img src="assets/previews/mannequin.webp" alt="Manequim de tecido"><p>Visualização 3D indisponível. Verifique sua conexão e a aceleração gráfica do navegador.</p></div>
+<div id="ui"><div id="title">DOTH®</div><div id="edition">MODULAR FITTING ROOM / 360°</div><div id="badge">● GLB / ACERVO REAL</div><div id="message" role="status">CARREGANDO MANEQUIM…</div>
+<div id="help">ARRASTE PARA GIRAR · SCROLL OU PINÇA PARA ZOOM</div>
+<div id="camera"><button id="rotLeft" aria-label="Girar à esquerda">↶</button><button id="rotRight" aria-label="Girar à direita">↷</button><button id="zoomIn" aria-label="Aproximar">＋</button><button id="zoomOut" aria-label="Afastar">－</button><button id="auto" aria-label="Giro automático">⟳</button><button id="reset" aria-label="Centralizar câmera">⌖</button></div><div id="selectors"></div></div>
+<script type="module">
+import * as THREE from 'three';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+const el=id=>document.getElementById(id);
+const options={
+hat:[{label:'SEM BONÉ'},{label:'CAMUFLADO',key:'cap_camo',id:4,mode:'cap'},{label:'XADREZ',key:'cap_plaid',id:5,mode:'cap'},{label:'ONCINHA',key:'cap_leopard',id:6,mode:'cap'},{label:'ONCINHA P&B',key:'cap_leopard',id:7,mode:'cap',mono:true}],
+top:[{label:'SEM CAMISA'},{label:'JAQUETA CREME',key:'jacket_cream',id:3,mode:'shirt'},{label:'RENDA *',key:'jacket_cream',id:2,mode:'shirt',reference:true},{label:'CAMISA MODULAR *',key:'jacket_cream',id:1,mode:'shirt',reference:true}],
+bottom:[{label:'SEM CALÇA'},{label:'CARGO',key:'pants_cargo',id:8,mode:'pants'},{label:'CARGO PRETA',key:'pants_black',id:9,mode:'pants'},{label:'BERMUDA *',key:'pants_cargo',id:1,mode:'shorts',reference:true},{label:'BERMUDA + SAIA *',key:'pants_cargo',id:0,mode:'shortskirt',reference:true}],
+full:[{label:'SEM JARDINEIRA'},{label:'JARDINEIRA CREME',key:'overalls_cream',id:1,mode:'overalls'},{label:'VESTIDO *',key:'overalls_cream',id:0,mode:'dress',reference:true}]
+};
+const slots=['hat','top','bottom','full'],selected={hat:1,top:1,bottom:1,full:0},attached={},cache=new Map(),pending=new Map(),loader=new GLTFLoader();
+let renderer,scene,root,controls,camera,raf=0,auto=false,ready=false,visible=!document.hidden,revision=0,dragged=false;
+function status(s){el('message').textContent=s;el('message').hidden=!s}
+function send(type,data){if(parent!==window)parent.postMessage(Object.assign({source:'doth-fitting-room',type},data||{}),location.origin)}
+function option(slot){return options[slot][selected[slot]]}
+function drawSelectors(){el('selectors').innerHTML=slots.map(slot=>{const a=option(slot),name={hat:'01 / BONÉ',top:'02 / CAMISA',bottom:'03 / CALÇA',full:'04 / JARDINEIRA'}[slot];return '<div class="item"><div class="type">'+name+'</div><div class="switch"><button data-slot="'+slot+'" data-dir="-1" aria-label="Anterior '+name+'">←</button><div class="name">'+a.label+'</div><button data-slot="'+slot+'" data-dir="1" aria-label="Próximo '+name+'">→</button></div><div class="ref">'+(a.reference?'* GLB DE REFERÊNCIA':'&nbsp;')+'</div></div>'}).join('')}
+function requestDraw(){if(visible&&!raf)raf=requestAnimationFrame(render)}
+function size(){if(!renderer)return;const rect=el('scene').getBoundingClientRect();const w=Math.max(1,Math.round(rect.width)),h=Math.max(1,Math.round(rect.height));if(renderer.domElement.width!==Math.round(w*renderer.getPixelRatio())||renderer.domElement.height!==Math.round(h*renderer.getPixelRatio())){renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();requestDraw()}}
+function render(){raf=0;if(!visible||!ready)return;size();if(auto){root.rotation.y+=.006}controls.update();renderer.render(scene,camera);if(auto)requestDraw()}
+function cloneModel(source){const obj=source.clone(true);obj.traverse(child=>{if(child.isMesh){child.material=Array.isArray(child.material)?child.material.map(m=>m.clone()):child.material.clone();child.frustumCulled=false}});return obj}
+async function asset(key){if(cache.has(key))return cloneModel(cache.get(key));if(!pending.has(key)){pending.set(key,loader.loadAsync('assets/'+key+'.glb').then(g=>{cache.set(key,g.scene);pending.delete(key);return g.scene}).catch(e=>{pending.delete(key);throw e}))}return cloneModel(await pending.get(key))}
+function positionModel(obj,slot){
+ const bounds=new THREE.Box3().setFromObject(obj),dimensions=bounds.getSize(new THREE.Vector3()),center=bounds.getCenter(new THREE.Vector3());if(!dimensions.y||!Number.isFinite(dimensions.y))throw Error('Geometria inválida');
+ // Independent models have no shared skeleton; normalize by bounding box to a conceptual mannequin.
+ const height={mannequin:4.7,hat:.65,top:1.62,bottom:2.26,full:3.57}[slot];
+ const scale=height/dimensions.y;obj.scale.setScalar(scale);
+ const y={mannequin:0,hat:2.30,top:.68,bottom:-1.15,full:-.17}[slot];
+ obj.position.set(-center.x*scale,y-center.y*scale,-center.z*scale);
+ if(slot==='hat')obj.position.z+=.13;
+ if(slot==='top')obj.position.z+=.12;
+ if(slot==='bottom'||slot==='full')obj.position.z+=.055;
+ return obj
+}
+function disposeClone(obj){if(!obj)return;obj.traverse(c=>{if(c.isMesh){const mats=Array.isArray(c.material)?c.material:[c.material];mats.forEach(m=>m.dispose())}});root.remove(obj)}
+async function put(slot,stamp){
+ const a=option(slot);disposeClone(attached[slot]);attached[slot]=null;requestDraw();
+ if(!a.key)return;try{const obj=positionModel(await asset(a.key),slot);if(stamp!==revision){disposeClone(obj);return}
+  if(a.mono)obj.traverse(c=>{if(c.isMesh){const materials=Array.isArray(c.material)?c.material:[c.material];materials.forEach(m=>{m.color.set('#dedede');if(m.map){m.map=m.map.clone();m.map.colorSpace=THREE.SRGBColorSpace;/* monochrome effect is approximate */}m.needsUpdate=true})}});
+  attached[slot]=obj;root.add(obj);status('');requestDraw();
+ }catch(err){console.error('DOTH GLB',a.key,err);status('MODELO '+a.key+' NÃO CARREGOU');}
+}
+function emit(slot){const a=option(slot);send('selection',{slot,item:a.key?{id:a.id,mode:a.mode}:null})}
+async function refresh(){const stamp=++revision;drawSelectors();if(!ready)return;status('CARREGANDO PEÇAS 3D…');await Promise.all(slots.map(slot=>put(slot,stamp)));if(stamp===revision)status('');requestDraw()}
+function select(slot,direction){selected[slot]=(selected[slot]+direction+options[slot].length)%options[slot].length;if(slot==='full'&&selected.full){selected.top=0;selected.bottom=0}if((slot==='top'||slot==='bottom')&&selected[slot])selected.full=0;refresh();emit(slot);if(slot==='full'&&selected.full){emit('top');emit('bottom')}else if(slot==='top'||slot==='bottom')emit('full')}
+el('selectors').addEventListener('click',e=>{const b=e.target.closest('[data-slot]');if(b)select(b.dataset.slot,Number(b.dataset.dir))});
+function applyParentLook(look){if(!look)return;for(const slot of slots){const p=look[slot];const index=options[slot].findIndex(a=>p&&a.id===p.id&&a.mode===p.mode);selected[slot]=index>=0?index:0}refresh()}
+window.addEventListener('message',e=>{if(e.origin!==location.origin||e.data?.source!=='doth-site')return;if(e.data.type==='set-look')applyParentLook(e.data.look);if(e.data.type==='rotate'){root.rotation.y+=e.data.amount||0;requestDraw()}if(e.data.type==='zoom'){camera.position.multiplyScalar(e.data.amount<0?.9:1.1);requestDraw()}if(e.data.type==='reset')resetCamera();if(e.data.type==='spin'){auto=!!e.data.value;requestDraw()}});
+function resetCamera(){root.rotation.set(0,-.17,0);camera.position.set(0,.2,8.4);controls.target.set(0,0,0);controls.update();requestDraw()}
+function init(){
+ try{renderer=new THREE.WebGLRenderer({alpha:true,antialias:true,powerPreference:'low-power',preserveDrawingBuffer:false});renderer.setPixelRatio(Math.min(devicePixelRatio||1,innerWidth<700?1.25:1.5));renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.5;
+ el('scene').appendChild(renderer.domElement);scene=new THREE.Scene();scene.background=null;root=new THREE.Group();scene.add(root);camera=new THREE.PerspectiveCamera(35,1,.1,100);camera.position.set(0,.2,8.4);
+ controls=new OrbitControls(camera,renderer.domElement);controls.enablePan=false;controls.enableDamping=false;controls.minDistance=4.5;controls.maxDistance=13;controls.minPolarAngle=Math.PI*.31;controls.maxPolarAngle=Math.PI*.69;controls.target.set(0,0,0);controls.addEventListener('change',requestDraw);
+ scene.add(new THREE.HemisphereLight(0xffffff,0x99978e,2));const light=new THREE.DirectionalLight(0xffffff,2.2);light.position.set(-3,7,6);scene.add(light);const back=new THREE.DirectionalLight(0xffffff,.8);back.position.set(4,4,-5);scene.add(back);
+ ready=true;size();return true
+ }catch(e){console.error(e);el('fallback').style.display='flex';status('WEBGL INDISPONÍVEL');return false}
+}
+el('rotLeft').onclick=()=>{root.rotation.y-=Math.PI/6;requestDraw()};
+el('rotRight').onclick=()=>{root.rotation.y+=Math.PI/6;requestDraw()};
+el('zoomIn').onclick=()=>{camera.position.multiplyScalar(.88);controls.update();requestDraw()};
+el('zoomOut').onclick=()=>{camera.position.multiplyScalar(1.12);controls.update();requestDraw()};
+el('auto').onclick=()=>{auto=!auto;el('auto').classList.toggle('active',auto);requestDraw()};
+el('reset').onclick=resetCamera;
+document.addEventListener('visibilitychange',()=>{visible=!document.hidden;if(visible)requestDraw();else{cancelAnimationFrame(raf);raf=0}});
+window.addEventListener('resize',()=>{if(renderer){renderer.setPixelRatio(Math.min(devicePixelRatio||1,innerWidth<700?1.25:1.5));size();requestDraw()}});
+drawSelectors();
+if(init()){try{const man=positionModel(await asset('mannequin'),'mannequin');root.add(man);status('');requestDraw();send('ready');await refresh()}catch(err){console.error(err);status('MANEQUIM NÃO CARREGOU');el('fallback').style.display='flex'}}
+</script></body></html>
