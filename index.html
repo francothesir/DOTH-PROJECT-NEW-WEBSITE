@@ -280,7 +280,7 @@ function updateFallback(){
 updateFallback();
 app.setRebuilder(updateFallback);
 
-const contextOptions={alpha:true,antialias:true,depth:true,preserveDrawingBuffer:true,premultipliedAlpha:false};
+const contextOptions={alpha:true,antialias:true,depth:true,preserveDrawingBuffer:true,premultipliedAlpha:false,powerPreference:'low-power'};
 const gl=canvas.getContext('webgl2',contextOptions)||canvas.getContext('webgl',contextOptions)||canvas.getContext('experimental-webgl',contextOptions);
 if(!gl){stageFallback?.querySelector('.fallback-note')?.replaceChildren(document.createTextNode('PRÉVIA 2D · WEBGL INDISPONÍVEL'));const msg=document.createElement('div');msg.style.cssText='display:none';msg.textContent='WebGL indisponível neste navegador. Ative aceleração gráfica e atualize Chrome, Safari ou Firefox.';stage.appendChild(msg);return;}
 const uint32Ext=(typeof WebGL2RenderingContext!=='undefined' && gl instanceof WebGL2RenderingContext)||gl.getExtension('OES_element_index_uint');
@@ -341,13 +341,13 @@ function readGlb(ab){const dv=new DataView(ab);if(dv.getUint32(0,true)!==0x46546
  if(texId!==undefined){const imageIndex=meta.textures[texId].source,b=meta.bufferViews[meta.images[imageIndex].bufferView],mime=meta.images[imageIndex].mimeType||'image/jpeg',bytes=ab.slice(binStart+b.byteOffset,binStart+b.byteOffset+b.byteLength);const url=URL.createObjectURL(new Blob([bytes],{type:mime}));
   const texture=gl.createTexture();mesh.texture=texture;gl.bindTexture(gl.TEXTURE_2D,texture);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([210,205,197,255]));
   gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
-  const img=new Image();img.onload=()=>{gl.bindTexture(gl.TEXTURE_2D,texture);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGB,gl.RGB,gl.UNSIGNED_BYTE,img);gl.generateMipmap(gl.TEXTURE_2D);URL.revokeObjectURL(url);};img.onerror=()=>URL.revokeObjectURL(url);img.src=url;
+  const img=new Image();img.onload=()=>{gl.bindTexture(gl.TEXTURE_2D,texture);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGB,gl.RGB,gl.UNSIGNED_BYTE,img);gl.generateMipmap(gl.TEXTURE_2D);URL.revokeObjectURL(url);invalidate();};img.onerror=()=>URL.revokeObjectURL(url);img.src=url;
  }
  return mesh;
 }
 function fromBase64(b64){const binary=atob(b64),arr=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)arr[i]=binary.charCodeAt(i);return arr.buffer;}
 async function ensureModel(key){if(modelCache.has(key))return modelCache.get(key);if(modelJobs.has(key))return modelJobs.get(key);
- const job=(async()=>{try{const ab=window.DOTH_EMBEDDED_MODELS?.[key]?fromBase64(window.DOTH_EMBEDDED_MODELS[key]):await (async()=>{const r=await fetch(manifest[key]);if(!r.ok)throw new Error('HTTP '+r.status);return r.arrayBuffer();})();const mesh=readGlb(ab);modelCache.set(key,mesh);return mesh;}catch(err){console.warn('[DOTH] Modelo não carregado:',key,err);modelCache.set(key,null);if(key==='mannequin')noMannequin=true;return null;}})();modelJobs.set(key,job);return job;
+ const job=(async()=>{try{const ab=window.DOTH_EMBEDDED_MODELS?.[key]?fromBase64(window.DOTH_EMBEDDED_MODELS[key]):await (async()=>{const r=await fetch(manifest[key]);if(!r.ok)throw new Error('HTTP '+r.status);return r.arrayBuffer();})();const mesh=readGlb(ab);modelCache.set(key,mesh);invalidate();return mesh;}catch(err){console.warn('[DOTH] Modelo não carregado:',key,err);modelCache.set(key,null);invalidate();if(key==='mannequin')noMannequin=true;return null;}})();modelJobs.set(key,job);return job;
 }
 const baseSettings={scale:4.25,x:0,y:-2.08,z:0};
 // Source models come from different standalone Tripo exports, not a common rig. Calibrated transforms approximate their fit on the selected mannequin.
@@ -359,14 +359,21 @@ function rebuild(){clearProcedural();activeModels=[];for(const item of app.activ
  if(item.mode==='shortskirt')proceduralSkirt(color);
  if(spec){activeModels.push({...spec,...placement(spec.key),id:item.id});ensureModel(spec.key);}
  }
+ invalidate();
 }
 let yaw=-.18,targetYaw=yaw,pitch=0,targetPitch=0,distance=8.8,targetDistance=8.8,lastFrame=0,drag=false,dragX=0,dragY=0,savedYaw=0,savedPitch=0;
-function size(){const rect=stage.getBoundingClientRect();let dpr=Math.min(window.devicePixelRatio||1,2),w=Math.max(50,Math.round(rect.width*dpr)),h=Math.max(50,Math.round(rect.height*dpr));if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;gl.viewport(0,0,w,h);}return [w,h];}
+// Suspend WebGL while off-screen; render on demand instead of continuously.
+let frameId=0,stageVisible=true,tabVisible=!document.hidden;
+function invalidate(){if(frameId||!stageVisible||!tabVisible)return;frameId=requestAnimationFrame(frame);}
+new IntersectionObserver(entries=>{stageVisible=entries[0].isIntersecting;if(stageVisible){lastFrame=0;invalidate();}else if(frameId){cancelAnimationFrame(frameId);frameId=0;}},{rootMargin:'100px'}).observe(stage);
+document.addEventListener('visibilitychange',()=>{tabVisible=!document.hidden;if(tabVisible){lastFrame=0;invalidate();}else if(frameId){cancelAnimationFrame(frameId);frameId=0;}});
+window.addEventListener('resize',invalidate,{passive:true});
+function size(){const rect=stage.getBoundingClientRect();let dpr=Math.min(window.devicePixelRatio||1,window.matchMedia('(max-width: 700px)').matches?1.25:1.5),w=Math.max(50,Math.round(rect.width*dpr)),h=Math.max(50,Math.round(rect.height*dpr));if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;gl.viewport(0,0,w,h);}return [w,h];}
 function bindAttributes(mesh){if(mesh.file){gl.bindBuffer(gl.ARRAY_BUFFER,mesh.positions);gl.vertexAttribPointer(aPos,3,gl.FLOAT,false,0,0);gl.bindBuffer(gl.ARRAY_BUFFER,mesh.normals);gl.vertexAttribPointer(aNormal,3,gl.FLOAT,false,0,0);gl.bindBuffer(gl.ARRAY_BUFFER,mesh.uv);gl.vertexAttribPointer(aUv,2,gl.FLOAT,false,0,0);}else{gl.bindBuffer(gl.ARRAY_BUFFER,mesh.buffer);gl.vertexAttribPointer(aPos,3,gl.FLOAT,false,32,0);gl.vertexAttribPointer(aNormal,3,gl.FLOAT,false,32,12);gl.vertexAttribPointer(aUv,2,gl.FLOAT,false,32,24);}}
 function draw(mesh,settings,scene,pv){const mat=mul(scene,mul(trs(settings.scale||1,settings.x||0,settings.y||0,settings.z||0),rotY(settings.orient||0)));gl.uniformMatrix4fv(uni.model,false,mat);gl.uniformMatrix4fv(uni.mvp,false,mul(pv,mat));bindAttributes(mesh);
  gl.uniform3fv(uni.color,mesh.file?[1,1,1]:mesh.color);gl.uniform1f(uni.metal,0);gl.uniform1f(uni.lace,0);gl.uniform1f(uni.opacity,1);gl.uniform1f(uni.shadow,0);gl.uniform1f(uni.pattern,0);
  gl.uniform1f(uni.useTexture,mesh.file?1:0);gl.uniform1f(uni.mono,settings.mono?1:0);gl.uniform1f(uni.clip,settings.clip??-100);if(mesh.file){if(mesh.texture){gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,mesh.texture);gl.uniform1i(uni.tex,0);}gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,mesh.indices);gl.drawElements(gl.TRIANGLES,mesh.count,mesh.itype,0);}else{gl.drawArrays(gl.TRIANGLES,0,mesh.count);}}
-function frame(now){const t=Math.min((now-lastFrame)/16.66,3)||1;lastFrame=now;if(app.state.spin&&!drag)targetYaw+=.0034*t;
+function frame(now){frameId=0;if(!stageVisible||!tabVisible)return;const t=lastFrame?Math.min((now-lastFrame)/16.66,3):1;lastFrame=now;if(app.state.spin&&!drag)targetYaw+=.0034*t;
  yaw+=(targetYaw-yaw)*Math.min(.20*t,1);pitch+=(targetPitch-pitch)*Math.min(.20*t,1);distance+=(targetDistance-distance)*Math.min(.13*t,1);
  const [w,h]=size(),proj=perspective(34.5,w/h,.1,100),view=lookAt([0,0,distance],[0,-.09,0]),scene=mul(rotY(yaw),rotX(pitch)),pv=mul(proj,view);
  gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.useProgram(prog);
@@ -375,20 +382,20 @@ function frame(now){const t=Math.min((now-lastFrame)/16.66,3)||1;lastFrame=now;i
  // Draw apparel after the mannequin; attachments are independent static meshes.
  for(const spec of activeModels){const m=modelCache.get(spec.key);if(m)draw(m,spec,scene,pv);}
  for(const m of procedural)draw(m,{scale:1,x:0,y:0,z:0},scene,pv);
- requestAnimationFrame(frame);
+ if(app.state.spin||drag||Math.abs(yaw-targetYaw)>.001||Math.abs(pitch-targetPitch)>.001||Math.abs(distance-targetDistance)>.005)invalidate();
 }
-function rotate(amount){targetYaw+=amount;}
-function zoom(amount){targetDistance=Math.max(6.1,Math.min(12,targetDistance+amount));}
-canvas.addEventListener('pointerdown',e=>{if(e.button!==0&&e.pointerType!=='touch')return;drag=true;dragX=e.clientX;dragY=e.clientY;savedYaw=targetYaw;savedPitch=targetPitch;stage.classList.add('dragging');canvas.setPointerCapture(e.pointerId);});
-canvas.addEventListener('pointermove',e=>{if(!drag)return;const dx=e.clientX-dragX,dy=e.clientY-dragY;targetYaw=savedYaw+dx*.011;targetPitch=Math.max(-.19,Math.min(.25,savedPitch+dy*.0034));});
+function rotate(amount){targetYaw+=amount;invalidate();}
+function zoom(amount){targetDistance=Math.max(6.1,Math.min(12,targetDistance+amount));invalidate();}
+canvas.addEventListener('pointerdown',e=>{if(e.button!==0&&e.pointerType!=='touch')return;drag=true;dragX=e.clientX;dragY=e.clientY;savedYaw=targetYaw;savedPitch=targetPitch;stage.classList.add('dragging');canvas.setPointerCapture(e.pointerId);invalidate();});
+canvas.addEventListener('pointermove',e=>{if(!drag)return;const dx=e.clientX-dragX,dy=e.clientY-dragY;targetYaw=savedYaw+dx*.011;targetPitch=Math.max(-.19,Math.min(.25,savedPitch+dy*.0034));invalidate();});
 function endDrag(){drag=false;stage.classList.remove('dragging');}canvas.addEventListener('pointerup',endDrag);canvas.addEventListener('pointercancel',endDrag);canvas.addEventListener('lostpointercapture',endDrag);
 canvas.addEventListener('wheel',e=>{if(e.ctrlKey)return;e.preventDefault();zoom(e.deltaY>0?.36:-.36);},{passive:false});
 stage.addEventListener('keydown',e=>{if(e.key==='ArrowRight'){rotate(.28);e.preventDefault();}if(e.key==='ArrowLeft'){rotate(-.28);e.preventDefault();}if(e.key==='+'){zoom(-.35);e.preventDefault();}if(e.key==='-'){zoom(.35);e.preventDefault();}});
 document.getElementById('rot-left').addEventListener('click',()=>rotate(-Math.PI/4));document.getElementById('rot-right').addEventListener('click',()=>rotate(Math.PI/4));document.getElementById('zoom-in').addEventListener('click',()=>zoom(-.6));document.getElementById('zoom-out').addEventListener('click',()=>zoom(.6));
-document.getElementById('auto-turn').addEventListener('click',e=>{app.state.spin=!app.state.spin;e.currentTarget.classList.toggle('on',app.state.spin);e.currentTarget.setAttribute('aria-pressed',String(app.state.spin));app.toast(app.state.spin?'ROTAÇÃO AUTOMÁTICA ATIVADA':'ROTAÇÃO AUTOMÁTICA PAUSADA');});
-document.getElementById('reset-view').addEventListener('click',()=>{targetYaw=-.18;targetPitch=0;targetDistance=8.8;});
+document.getElementById('auto-turn').addEventListener('click',e=>{app.state.spin=!app.state.spin;invalidate();e.currentTarget.classList.toggle('on',app.state.spin);e.currentTarget.setAttribute('aria-pressed',String(app.state.spin));app.toast(app.state.spin?'ROTAÇÃO AUTOMÁTICA ATIVADA':'ROTAÇÃO AUTOMÁTICA PAUSADA');});
+document.getElementById('reset-view').addEventListener('click',()=>{targetYaw=-.18;targetPitch=0;targetDistance=8.8;invalidate();});
 let exportPending=false;document.getElementById('save-look').addEventListener('click',()=>{try{if(exportPending)return;exportPending=true;const out=document.createElement('canvas');out.width=1200;out.height=1500;const c=out.getContext('2d');c.fillStyle='#e4e3dc';c.fillRect(0,0,1200,1500);c.strokeStyle='rgba(38,42,38,.15)';for(let x=50;x<1200;x+=100){c.beginPath();c.moveTo(x,130);c.lineTo(x,1360);c.stroke();}for(let y=130;y<1360;y+=100){c.beginPath();c.moveTo(0,y);c.lineTo(1200,y);c.stroke();}c.fillStyle='#171918';c.font='bold 77px Arial';c.fillText('DOTH',55,96);c.font='20px monospace';c.fillText('MODULAR FIT EXPERIENCE — 360°',770,86);c.drawImage(canvas,170,110,860,1140);c.fillStyle='#171918';c.fillRect(0,1330,1200,170);c.fillStyle='#e4e3dc';c.font='bold 27px Arial';c.fillText('SEU LOOK / DOTH PROJECT',55,1386);c.font='18px monospace';let names=app.activePieces().map(a=>app.getProd(a.id).name).join(' + ')||'MANEQUIM SEM PEÇAS';if(names.length>79)names=names.slice(0,75)+'…';c.fillText(names,55,1425);c.fillStyle='#b9bbaf';c.font='15px monospace';c.fillText('MODELOS GLB EM VISUALIZAÇÃO DIGITAL — dothproject.com.br',55,1460);const a=document.createElement('a');a.download='DOTH-MEU-LOOK.png';a.href=out.toDataURL('image/png');document.body.appendChild(a);a.click();a.remove();app.toast('IMAGEM SALVA');}catch(e){console.error(e);app.toast('NÃO FOI POSSÍVEL SALVAR A IMAGEM');}finally{exportPending=false;}});
-rebuild();app.setRebuilder(rebuild);ensureModel('mannequin');requestAnimationFrame(frame);
+rebuild();app.setRebuilder(rebuild);ensureModel('mannequin');invalidate();
 window.DOTH_3D={modelCache,manifest,placement,ensureModel};
 })();
 </script>
