@@ -30,11 +30,25 @@ full:[{label:'SEM JARDINEIRA'},{label:'JARDINEIRA CREME',key:'overalls_cream',id
 const slots=['hat','top','bottom','full'],selected={hat:1,top:1,bottom:1,full:0},attached={},cache=new Map(),pending=new Map(),loader=new GLTFLoader();
 let renderer,scene,root,controls,camera,raf=0,auto=false,ready=false,visible=!document.hidden,revision=0,dragged=false;
 let mannequinBounds=null;
+const fitUniforms={inverse:{value:new THREE.Matrix4()},center:{value:new THREE.Vector3()},dimensions:{value:new THREE.Vector3(1,1,1)},wearTop:{value:0},wearBottom:{value:0},wearHat:{value:0}};
+function applyBodyMask(mannequin){
+ // Hide ONLY the covered portions of the mannequin. Without this, the solid GLB
+ // body uses the depth buffer to conceal clothes imported from a different rig.
+ const patch=(material)=>{material.onBeforeCompile=shader=>{
+  Object.assign(shader.uniforms,{uFitInverseRoot:fitUniforms.inverse,uFitCenter:fitUniforms.center,uFitDims:fitUniforms.dimensions,uWearTop:fitUniforms.wearTop,uWearBottom:fitUniforms.wearBottom,uWearHat:fitUniforms.wearHat});
+  shader.vertexShader=shader.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vDothFit;\nuniform mat4 uFitInverseRoot;');
+  shader.vertexShader=shader.vertexShader.replace('#include <begin_vertex>','#include <begin_vertex>\nvDothFit=(uFitInverseRoot*modelMatrix*vec4(transformed,1.0)).xyz;');
+  shader.fragmentShader=shader.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vDothFit;\nuniform vec3 uFitCenter;\nuniform vec3 uFitDims;\nuniform float uWearTop;\nuniform float uWearBottom;\nuniform float uWearHat;');
+  shader.fragmentShader=shader.fragmentShader.replace('#include <dithering_fragment>',`\nvec3 fit=(vDothFit-uFitCenter)/uFitDims+vec3(0.5);\nfloat side=abs(fit.x-0.5);\nif(uWearTop>0.5 && fit.y>0.435 && fit.y<0.815 && side<0.305) discard;\nif(uWearBottom>0.5 && fit.y>0.035 && fit.y<0.505 && side<0.37) discard;\nif(uWearHat>0.5 && fit.y>0.955 && side<0.19) discard;\n#include <dithering_fragment>`);
+ };material.customProgramCacheKey=()=> 'doth-body-mask-3';material.needsUpdate=true};
+ mannequin.traverse(mesh=>{if(mesh.isMesh){if(Array.isArray(mesh.material))mesh.material.forEach(patch);else patch(mesh.material)}});
+}
+function refreshBodyMask(){fitUniforms.wearTop.value=Number(!!(attached.top||attached.full));fitUniforms.wearBottom.value=Number(!!(attached.bottom||attached.full));fitUniforms.wearHat.value=Number(!!attached.hat);requestDraw();}
 const fitTargets={
- hat:{width:.31,height:.105,center:.94,depth:.24,front:.055},
- top:{width:.88,height:.325,center:.665,depth:.54,front:.04},
- bottom:{width:.64,height:.455,center:.235,depth:.47,front:.035},
- full:{width:.75,height:.76,center:.40,depth:.53,front:.035}
+ hat:{width:.38,height:.12,center:.965,depth:.34,front:.26},
+ top:{width:.92,height:.36,center:.665,depth:.77,front:.115},
+ bottom:{width:.71,height:.51,center:.245,depth:.68,front:.095},
+ full:{width:.83,height:.78,center:.42,depth:.72,front:.105}
 };
 function status(s){el('message').textContent=s;el('message').hidden=!s}
 function send(type,data){if(parent!==window)parent.postMessage(Object.assign({source:'doth-fitting-room',type},data||{}),location.origin)}
@@ -42,7 +56,7 @@ function option(slot){return options[slot][selected[slot]]}
 function drawSelectors(){el('selectors').innerHTML=slots.map(slot=>{const a=option(slot),name={hat:'01 / BONÉ',top:'02 / CAMISA',bottom:'03 / CALÇA',full:'04 / JARDINEIRA'}[slot];return '<div class="item"><div class="type">'+name+'</div><div class="switch"><button data-slot="'+slot+'" data-dir="-1" aria-label="Anterior '+name+'">←</button><div class="name">'+a.label+'</div><button data-slot="'+slot+'" data-dir="1" aria-label="Próximo '+name+'">→</button></div><div class="ref">'+(a.reference?'* GLB DE REFERÊNCIA':'&nbsp;')+'</div></div>'}).join('')}
 function requestDraw(){if(visible&&!raf)raf=requestAnimationFrame(render)}
 function size(){if(!renderer)return;const rect=el('scene').getBoundingClientRect();const w=Math.max(1,Math.round(rect.width)),h=Math.max(1,Math.round(rect.height));if(renderer.domElement.width!==Math.round(w*renderer.getPixelRatio())||renderer.domElement.height!==Math.round(h*renderer.getPixelRatio())){renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();requestDraw()}}
-function render(){raf=0;if(!visible||!ready)return;size();if(auto){root.rotation.y+=.006}controls.update();renderer.render(scene,camera);if(auto)requestDraw()}
+function render(){raf=0;if(!visible||!ready)return;size();if(auto){root.rotation.y+=.006}controls.update();root.updateMatrixWorld(true);fitUniforms.inverse.value.copy(root.matrixWorld).invert();renderer.render(scene,camera);if(auto)requestDraw()}
 function cloneModel(source){const obj=source.clone(true);obj.traverse(child=>{if(child.isMesh){child.material=Array.isArray(child.material)?child.material.map(m=>m.clone()):child.material.clone();child.frustumCulled=false}});return obj}
 async function asset(key){if(cache.has(key))return cloneModel(cache.get(key));if(!pending.has(key)){pending.set(key,loader.loadAsync('assets/'+key+'.glb').then(g=>{cache.set(key,g.scene);pending.delete(key);return g.scene}).catch(e=>{pending.delete(key);throw e}))}return cloneModel(await pending.get(key))}
 function positionModel(obj,slot){
@@ -59,6 +73,9 @@ function positionModel(obj,slot){
   obj.position.set(-sourceCenter.x*s,-sourceCenter.y*s,-sourceCenter.z*s);
   obj.updateMatrixWorld(true);
   mannequinBounds=new THREE.Box3().setFromObject(obj);
+  mannequinBounds.getCenter(fitUniforms.center.value);
+  mannequinBounds.getSize(fitUniforms.dimensions.value);
+  applyBodyMask(obj);
   return obj;
  }
  if(!mannequinBounds)throw Error('Manequim ainda não calibrado');
@@ -90,10 +107,10 @@ function positionModel(obj,slot){
 }
 function disposeClone(obj){if(!obj)return;obj.traverse(c=>{if(c.isMesh){const mats=Array.isArray(c.material)?c.material:[c.material];mats.forEach(m=>m.dispose())}});root.remove(obj)}
 async function put(slot,stamp){
- const a=option(slot);disposeClone(attached[slot]);attached[slot]=null;requestDraw();
+ const a=option(slot);disposeClone(attached[slot]);attached[slot]=null;refreshBodyMask();requestDraw();
  if(!a.key)return;try{const obj=await asset(a.key);obj.userData.dothKey=a.key;positionModel(obj,slot);if(stamp!==revision){disposeClone(obj);return}
   if(a.mono)obj.traverse(c=>{if(c.isMesh){const materials=Array.isArray(c.material)?c.material:[c.material];materials.forEach(m=>{m.color.set('#dedede');if(m.map){m.map=m.map.clone();m.map.colorSpace=THREE.SRGBColorSpace;/* monochrome effect is approximate */}m.needsUpdate=true})}});
-  attached[slot]=obj;root.add(obj);status('');requestDraw();
+  attached[slot]=obj;root.add(obj);refreshBodyMask();status('');requestDraw();
  }catch(err){console.error('DOTH GLB',a.key,err);status('MODELO '+a.key+' NÃO CARREGOU');}
 }
 function emit(slot){const a=option(slot);send('selection',{slot,item:a.key?{id:a.id,mode:a.mode}:null})}
