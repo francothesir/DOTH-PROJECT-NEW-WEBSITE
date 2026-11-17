@@ -31,7 +31,7 @@ const slots=['hat','top','bottom','full'],selected={hat:1,top:1,bottom:1,full:0}
 let renderer,scene,root,controls,camera,raf=0,auto=false,ready=false,visible=!document.hidden,revision=0,dragged=false;
 let mannequinBounds=null;
 const fitTargets={
- hat:{width:.31,height:.105,center:.895,depth:.24,front:.055},
+ hat:{width:.31,height:.105,center:.94,depth:.24,front:.055},
  top:{width:.88,height:.325,center:.665,depth:.54,front:.04},
  bottom:{width:.64,height:.455,center:.235,depth:.47,front:.035},
  full:{width:.75,height:.76,center:.40,depth:.53,front:.035}
@@ -73,8 +73,8 @@ function positionModel(obj,slot){
  let sy=height/sourceSize.y;
  let sz=depth/Math.max(.0001,sourceSize.z);
  // Preserve plausible proportions and cap severely flattened geometry.
- sx=THREE.MathUtils.clamp(sx,sy*.65,sy*1.65);
- sz=THREE.MathUtils.clamp(sz,sy*.65,sy*1.65);
+ sx=THREE.MathUtils.clamp(sx,sy*.45,sy*2.2);
+ sz=THREE.MathUtils.clamp(sz,sy*.45,sy*2.2);
  obj.scale.set(sx,sy,sz);
  const y=body.min.y+bodySize.y*t.center;
  obj.position.set(
@@ -102,10 +102,10 @@ function select(slot,direction){selected[slot]=(selected[slot]+direction+options
 el('selectors').addEventListener('click',e=>{const b=e.target.closest('[data-slot]');if(b)select(b.dataset.slot,Number(b.dataset.dir))});
 function applyParentLook(look){if(!look)return;for(const slot of slots){const p=look[slot];const index=options[slot].findIndex(a=>p&&a.id===p.id&&a.mode===p.mode);selected[slot]=index>=0?index:0}refresh()}
 window.addEventListener('message',e=>{if(e.origin!==location.origin||e.data?.source!=='doth-site')return;if(e.data.type==='set-look')applyParentLook(e.data.look);if(e.data.type==='rotate'){root.rotation.y+=e.data.amount||0;requestDraw()}if(e.data.type==='zoom'){camera.position.multiplyScalar(e.data.amount<0?.9:1.1);requestDraw()}if(e.data.type==='reset')resetCamera();if(e.data.type==='spin'){auto=!!e.data.value;requestDraw()}});
-function resetCamera(){root.rotation.set(0,-.17,0);camera.position.set(0,.2,8.4);controls.target.set(0,0,0);controls.update();requestDraw()}
+function resetCamera(){root.rotation.set(0,-.17,0);camera.position.set(0,.2,9.4);controls.target.set(0,0,0);controls.update();requestDraw()}
 function init(){
  try{renderer=new THREE.WebGLRenderer({alpha:true,antialias:true,powerPreference:'low-power',preserveDrawingBuffer:false});renderer.setPixelRatio(Math.min(devicePixelRatio||1,innerWidth<700?1.25:1.5));renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.5;
- el('scene').appendChild(renderer.domElement);scene=new THREE.Scene();scene.background=null;root=new THREE.Group();scene.add(root);camera=new THREE.PerspectiveCamera(35,1,.1,100);camera.position.set(0,.2,8.4);
+ el('scene').appendChild(renderer.domElement);scene=new THREE.Scene();scene.background=null;root=new THREE.Group();scene.add(root);camera=new THREE.PerspectiveCamera(35,1,.1,100);camera.position.set(0,.2,9.4);
  controls=new OrbitControls(camera,renderer.domElement);controls.enablePan=false;controls.enableDamping=false;controls.minDistance=4.5;controls.maxDistance=13;controls.minPolarAngle=Math.PI*.31;controls.maxPolarAngle=Math.PI*.69;controls.target.set(0,0,0);controls.addEventListener('change',requestDraw);
  scene.add(new THREE.HemisphereLight(0xffffff,0x99978e,2));const light=new THREE.DirectionalLight(0xffffff,2.2);light.position.set(-3,7,6);scene.add(light);const back=new THREE.DirectionalLight(0xffffff,.8);back.position.set(4,4,-5);scene.add(back);
  ready=true;size();return true
