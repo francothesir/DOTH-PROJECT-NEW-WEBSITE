@@ -1,5 +1,14 @@
 # DOTH PROJECT — NEW WEBSITE (V6)
 
+## Preview online
+
+**[Abrir o site DOTH — preview no GitHub Pages](https://francothesir.github.io/DOTH-PROJECT-NEW-WEBSITE/)**
+
+Endereço: https://francothesir.github.io/DOTH-PROJECT-NEW-WEBSITE/
+
+> Para ativar o endereço, configure **Settings → Pages → Build and deployment → Source: GitHub Actions**. A publicação é executada pelo workflow de Pages a cada atualização da branch `main`.
+
+
 Site estático com provador 3D em GLB e catálogo com renders reais.
 
 ## Publicação GitHub Pages
