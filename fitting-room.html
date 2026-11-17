@@ -35,13 +35,17 @@ let mannequinBounds=null;
 // y is the lower edge of the object as a fraction of the mannequin's height.
 const SOURCE_MANNEQUIN_HEIGHT=0.979522705078125;
 const garmentFit={
- jacket_cream:{s:.49,y:.40,z:.025},
+ // Uniform scales tested with original GLBs in frontal and side views.
+ // Shift jacket back without losing the natural, wide shoulder fit.
+ jacket_cream:{s:.52,y:.38,z:-.003},
+ // Keep approved trousers unchanged.
  pants_cargo:{s:.56,y:0,z:0},
  pants_black:{s:.53,y:.005,z:0},
  overalls_cream:{s:.82,y:.022,z:.005},
- cap_camo:{s:.185,y:.902,z:.006},
- cap_plaid:{s:.205,y:.90,z:.006},
- cap_leopard:{s:.215,y:.90,z:.006,turn:Math.PI}
+ // Crown close to the mannequin's skull; original brim shape is untouched.
+ cap_camo:{s:.158,y:.897,z:.006},
+ cap_plaid:{s:.17,y:.898,z:.006},
+ cap_leopard:{s:.175,y:.901,z:.006,turn:Math.PI}
 };
 function status(s){el('message').textContent=s;el('message').hidden=!s}
 function send(type,data){if(parent!==window)parent.postMessage(Object.assign({source:'doth-fitting-room',type},data||{}),location.origin)}
