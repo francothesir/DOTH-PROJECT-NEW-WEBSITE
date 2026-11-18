@@ -23,14 +23,27 @@ def optimize(key,path):
  step=.0055 if key=='mannequin' else (.006 if key.startswith('cap') else .0065)
  qpos=np.round(pos/step).astype(np.int32)
  quv=np.round(uv/.055).astype(np.int32)
- keys=np.column_stack((qpos,quv))
- unique,inv=np.unique(keys,axis=0,return_inverse=True)
+ # Position comes ONLY from the spatial cluster. Previously the cluster key also
+ # contained the UV, so both sides of a UV seam were averaged separately, landed
+ # in slightly different places and opened cracks through which the mannequin
+ # showed. Now every UV variant of a spatial cluster shares the exact same point.
+ _,pinv=np.unique(qpos,axis=0,return_inverse=True);pinv=pinv.reshape(-1)
+ pn=int(pinv.max())+1
+ pcount=np.bincount(pinv,minlength=pn).astype(np.float64)
+ def pavg(src):return np.column_stack([np.bincount(pinv,weights=src[:,k],minlength=pn)/pcount for k in range(src.shape[1])]).astype(np.float32)
+ cluster_pos=pavg(pos);cluster_nor=pavg(nor)
+ cluster_nor/=np.maximum(np.linalg.norm(cluster_nor,axis=1,keepdims=True),1e-8)
+ keys=np.column_stack((pinv,quv))
+ unique,inv=np.unique(keys,axis=0,return_inverse=True);inv=inv.reshape(-1)
  n=len(unique)
- count=np.bincount(inv,minlength=n).astype(np.float32)
+ count=np.bincount(inv,minlength=n).astype(np.float64)
  def avg(src):return np.column_stack([np.bincount(inv,weights=src[:,k],minlength=n)/count for k in range(src.shape[1])]).astype(np.float32)
- pnew=avg(pos);nnew=avg(nor);unew=avg(uv)
- nnew/=np.maximum(np.linalg.norm(nnew,axis=1,keepdims=True),1e-8)
- mapped=inv[faces];keep=(mapped[:,0]!=mapped[:,1])&(mapped[:,1]!=mapped[:,2])&(mapped[:,0]!=mapped[:,2]);mapped=mapped[keep].astype(np.uint32,copy=False)
+ owner=unique[:,0]
+ pnew=cluster_pos[owner];nnew=cluster_nor[owner];unew=avg(uv)
+ # Degenerate test on the spatial cluster: a triangle collapsed in space is dropped
+ # even if its corners kept different UV variants.
+ mapped=inv[faces];pm=pinv[faces]
+ keep=(pm[:,0]!=pm[:,1])&(pm[:,1]!=pm[:,2])&(pm[:,0]!=pm[:,2]);mapped=mapped[keep].astype(np.uint32,copy=False)
  # Remove degenerate triangles formed by vertex clustering and repeated triangles within the same face.
  mapped=np.unique(mapped,axis=0)
  # Remove unused vertices for smaller output

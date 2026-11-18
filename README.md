@@ -33,6 +33,11 @@ Navegue até http://localhost:8000/ . Não abra o `index.html` diretamente como 
 - Boné oncinha marrom e versão P&B voltados para a frente no catálogo e no visualizador; xadrez mantém direção frontal original.
 - Ajuste de suporte a WebGL 2 e índices Uint32, quando disponível.
 
+## Correções V7 — roupas atravessando o manequim
+
+- **Fendas nas peças eliminadas** (`scripts/optimize_models.py`): a simplificação agrupava vértices por posição + UV, então os dois lados de cada costura de UV iam para pontos diferentes e abriam fendas por onde o manequim aparecia. Agora a posição vem só do agrupamento espacial; cada peça passou de 10–23 mil arestas abertas para zero (e os GLBs ficaram ~7% menores).
+- **Corpo se recolhe sob a roupa** (`fitting-room.html`, `conformBody`): a cada troca de look, cada vértice do manequim é testado ao longo da normal contra as peças vestidas (BVH via `three-mesh-bvh`). Se estiver fora ou rente ao tecido, é empurrado para dentro até ficar logo abaixo dele; invasões profundas, ou mais fundas que a própria casca do manequim, são ocultadas sob a peça. Mãos/braços ao lado da roupa (o raio sai do corpo para o ar antes de tocá-la) não são alterados. As roupas nunca são deformadas.
+
 ## Limites
 
 O ajuste das peças 3D ao manequim ainda é aproximado, pois os GLBs não são peças rigadas para o corpo. Não há simulação física de tecido nem digitalização de todos os modos.

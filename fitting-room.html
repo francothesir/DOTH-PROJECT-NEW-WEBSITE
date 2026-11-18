@@ -10,7 +10,7 @@
 #fallback{position:absolute;inset:0;background:var(--paper);display:none;align-items:center;justify-content:center;flex-direction:column;text-align:center;padding:25px;gap:15px}#fallback img{height:min(65vh,560px);max-width:80vw;object-fit:contain}#fallback p{max-width:420px;font:13px/1.6 Arial}
 @media(max-width:580px){#title{top:10px;left:11px;font-size:23px}#edition{top:39px;left:11px;font-size:8px}#badge{right:8px;top:10px;font-size:8px;padding:7px}#message{top:64px;font-size:9px}#selectors{bottom:8px;width:calc(100% - 10px);gap:3px}.item{padding:7px 3px}.type{font-size:8px}.name{font-size:9px}.switch{gap:1px}.switch button{width:22px;height:29px}.ref{font-size:7px}#help{left:10px;bottom:106px;font-size:8px}#camera{top:44%;right:7px}#camera button{height:31px;width:31px;font-size:17px}}
 </style>
-<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/","three-mesh-bvh":"https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.9.1/build/index.module.js"}}</script>
 </head><body>
 <div id="scene" aria-label="Manequim DOTH em 360 graus: arraste para girar"></div><div id="fallback"><img src="assets/previews/mannequin.webp" alt="Manequim de tecido"><p>Visualização 3D indisponível. Verifique sua conexão e a aceleração gráfica do navegador.</p></div>
 <div id="ui"><div id="title">DOTH®</div><div id="edition">MODULAR FITTING ROOM / 360°</div><div id="badge">● GLB / ACERVO REAL</div><div id="message" role="status">CARREGANDO MANEQUIM…</div>
@@ -20,6 +20,7 @@
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+import {MeshBVH} from 'three-mesh-bvh';
 const el=id=>document.getElementById(id);
 const options={
 hat:[{label:'SEM BONÉ'},{label:'CAMUFLADO',key:'cap_camo',id:4,mode:'cap'},{label:'XADREZ',key:'cap_plaid',id:5,mode:'cap'},{label:'ONCINHA',key:'cap_leopard',id:6,mode:'cap'},{label:'ONCINHA P&B',key:'cap_leopard',id:7,mode:'cap',mono:true}],
@@ -29,7 +30,7 @@ full:[{label:'SEM JARDINEIRA'},{label:'JARDINEIRA CREME',key:'overalls_cream',id
 };
 const slots=['hat','top','bottom','full'],selected={hat:1,top:1,bottom:1,full:0},attached={},cache=new Map(),pending=new Map(),loader=new GLTFLoader();
 let renderer,scene,root,controls,camera,raf=0,auto=false,ready=false,visible=!document.hidden,revision=0,dragged=false;
-let mannequinBounds=null,headBounds=null;
+let mannequinBounds=null,headBounds=null,body=null;
 // Amostra a geometria original do manequim na região superior, evitando usar
 // a largura dos ombros/corpo para dimensionar bonés.
 function measureHead(mannequin){
@@ -144,6 +145,176 @@ function positionModel(obj,slot){
  }
  return obj;
 }
+
+// ---------------------------------------------------------------------------
+// Ajuste corpo × roupa: os GLBs não são rigados para o manequim, então partes
+// do corpo atravessavam as peças. Em vez de distorcer as roupas, o manequim é
+// "recolhido" localmente: cada vértice do corpo é testado ao longo da sua
+// normal contra a superfície das peças vestidas (BVH) e, se estiver fora ou
+// rente ao tecido, é empurrado para dentro até ficar BODY_GAP abaixo dele.
+// Unidades: espaço local do manequim (altura ≈ 0,98).
+const BODY_GAP=.004,BODY_MAX_IN=.07,BODY_FEATHER=4,BODY_SELF_NEAR=.003,BODY_SEAM=.006,BODY_HIDE_DEPTH=.02;
+const bvhCache=new WeakMap();
+function bvhFor(geometry){let b=bvhCache.get(geometry);if(!b){b=new MeshBVH(geometry);bvhCache.set(geometry,b)}return b}
+function prepareBody(mannequin){
+ let mesh=null;mannequin.traverse(c=>{if(c.isMesh&&!mesh)mesh=c});
+ if(!mesh)return;
+ mesh.geometry=mesh.geometry.clone();// não altera o GLB em cache
+ const pos=mesh.geometry.attributes.position,nor=mesh.geometry.attributes.normal,n=pos.count;
+ // Vértices duplicados em costuras de UV recebem o mesmo deslocamento (sem rachaduras).
+ const groupOf=new Int32Array(n),keys=new Map(),gNormal=[];
+ for(let i=0;i<n;i++){
+  const k=Math.round(pos.getX(i)*2e4)+','+Math.round(pos.getY(i)*2e4)+','+Math.round(pos.getZ(i)*2e4);
+  let g=keys.get(k);if(g===undefined){g=gNormal.length/3;keys.set(k,g);gNormal.push(0,0,0)}
+  groupOf[i]=g;gNormal[g*3]+=nor.getX(i);gNormal[g*3+1]+=nor.getY(i);gNormal[g*3+2]+=nor.getZ(i);
+ }
+ const groups=gNormal.length/3,gPos=new Float32Array(groups*3),gN=new Float32Array(groups*3);
+ for(let i=0;i<n;i++){const g=groupOf[i];gPos[g*3]=pos.getX(i);gPos[g*3+1]=pos.getY(i);gPos[g*3+2]=pos.getZ(i)}
+ for(let g=0;g<groups;g++){const x=gNormal[g*3],y=gNormal[g*3+1],z=gNormal[g*3+2],l=Math.hypot(x,y,z)||1;gN[g*3]=x/l;gN[g*3+1]=y/l;gN[g*3+2]=z/l}
+ // Vizinhança por grupo para suavizar as bordas do recolhimento.
+ const idx=mesh.geometry.index,nb=Array.from({length:groups},()=>new Set());
+ if(idx)for(let t=0;t<idx.count;t+=3){const a=groupOf[idx.getX(t)],b=groupOf[idx.getX(t+1)],c=groupOf[idx.getX(t+2)];nb[a].add(b).add(c);nb[b].add(a).add(c);nb[c].add(a).add(b)}
+ // BVH do corpo em repouso: detecta quando o raio sai do próprio corpo (mão ao lado
+ // do quadril, braço junto ao tronco) antes de chegar à roupa — nesse caso não há invasão.
+ const selfGeo=new THREE.BufferGeometry();selfGeo.setAttribute('position',new THREE.BufferAttribute(pos.array.slice(),3));if(idx)selfGeo.setIndex(new THREE.BufferAttribute(idx.array.slice(),1));
+ const neighbors=nb.map(s=>Int32Array.from(s));
+ // A malha (Tripo, decimada) tem normais ruidosas: suaviza a direção usada para
+ // empurrar, senão vértices vizinhos se separam e formam "lascas".
+ for(let it=0;it<8;it++){
+  const next=gN.slice();
+  for(let g=0;g<groups;g++){
+   const list=neighbors[g];let x=gN[g*3],y=gN[g*3+1],z=gN[g*3+2];
+   for(let j=0;j<list.length;j++){const q=list[j]*3;x+=gN[q];y+=gN[q+1];z+=gN[q+2]}
+   const l=Math.hypot(x,y,z);if(l>1e-6){next[g*3]=x/l;next[g*3+1]=y/l;next[g*3+2]=z/l}
+  }
+  gN.set(next);
+ }
+ const self=new MeshBVH(selfGeo),thickness=new Float32Array(groups),r=new THREE.Ray();
+ // Espessura local ao longo da normal: o recolhimento nunca atravessa a casca.
+ for(let g=0;g<groups;g++){
+  r.origin.set(gPos[g*3],gPos[g*3+1],gPos[g*3+2]);r.direction.set(-gN[g*3],-gN[g*3+1],-gN[g*3+2]);
+  const h=self.raycastFirst(r,THREE.DoubleSide,BODY_SELF_NEAR,.2);thickness[g]=h?h.distance:.2;
+ }
+ body={mesh,self,thickness,restIndex:idx?idx.array.slice():null,rest:pos.array.slice(),groupOf,gPos,gN,neighbors};
+}
+// Classifica o caminho do raio dentro do corpo até a roupa:
+// 0 = não sai do corpo antes da roupa (invasão rasa → recolher);
+// 1 = sai para o ar (mão ao lado do quadril → não mexer);
+// 2 = sai de uma casca e entra noutra (emenda do manequim articulado, p.ex. ombro):
+//     a casca atravessa a roupa inteira → ocultar esses triângulos sob a peça.
+function pathThroughBody(self,r,px,py,pz,dx,dy,dz,limit){
+ r.origin.set(px,py,pz);r.direction.set(dx,dy,dz);
+ const exit=self.raycastFirst(r,THREE.DoubleSide,BODY_SELF_NEAR,limit);
+ if(!exit)return 0;
+ const reenter=self.raycastFirst(r,THREE.DoubleSide,exit.distance+1e-5,exit.distance+BODY_SEAM);
+ return reenter?2:1;
+}
+function conformBody(){
+ if(!body)return;
+ const {mesh,self,thickness,restIndex,rest,groupOf,gPos,gN,neighbors}=body,pos=mesh.geometry.attributes.position,groups=gN.length/3;
+ const push=new Float32Array(groups),hidden=new Uint8Array(groups);
+ root.updateMatrixWorld(true);
+ const bodyInv=new THREE.Matrix4().copy(mesh.matrixWorld).invert();
+ const tests=[];
+ const ray=new THREE.Ray(),selfRay=new THREE.Ray(),o=new THREE.Vector3(),d=new THREE.Vector3(),hit=new THREE.Vector3(),box=new THREE.Box3();
+ for(const slot of slots){
+  const garment=attached[slot];if(!garment)continue;
+  garment.traverse(g=>{
+   if(!g.isMesh)return;
+   const bvh=bvhFor(g.geometry);
+   const toGarment=new THREE.Matrix4().copy(g.matrixWorld).invert().multiply(mesh.matrixWorld);
+   const toBody=new THREE.Matrix4().copy(bodyInv).multiply(g.matrixWorld);
+   tests.push({bvh,toGarment,toBody});
+   if(!g.geometry.boundingBox)g.geometry.computeBoundingBox();
+   box.copy(g.geometry.boundingBox).applyMatrix4(toBody).expandByScalar(BODY_MAX_IN+BODY_GAP);
+   for(let k=0;k<groups;k++){
+    const px=gPos[k*3],py=gPos[k*3+1],pz=gPos[k*3+2];
+    if(px<box.min.x||px>box.max.x||py<box.min.y||py>box.max.y||pz<box.min.z||pz>box.max.z)continue;
+    const nx=gN[k*3],ny=gN[k*3+1],nz=gN[k*3+2];
+    // Raio começa BODY_GAP fora da pele e entra no corpo até BODY_MAX_IN.
+    o.set(px+nx*BODY_GAP,py+ny*BODY_GAP,pz+nz*BODY_GAP).applyMatrix4(toGarment);
+    d.set(px-nx*BODY_MAX_IN,py-ny*BODY_MAX_IN,pz-nz*BODY_MAX_IN).applyMatrix4(toGarment);
+    const far=d.distanceTo(o);if(!far)continue;
+    ray.origin.copy(o);ray.direction.copy(d).sub(o).divideScalar(far);
+    const h=bvh.raycastFirst(ray,THREE.DoubleSide,0,far);
+    if(!h)continue;
+    hit.copy(h.point).applyMatrix4(toBody);
+    // Distância percorrida no espaço do corpo = deslocamento necessário.
+    const amount=hit.distanceTo(o.set(px+nx*BODY_GAP,py+ny*BODY_GAP,pz+nz*BODY_GAP));
+    if(amount<=push[k])continue;
+    const path=amount>BODY_GAP+BODY_SELF_NEAR?pathThroughBody(self,selfRay,px,py,pz,-nx,-ny,-nz,amount-BODY_GAP):0;
+    if(path===1)continue;
+    if(path===2){hidden[k]=1;continue}
+    push[k]=amount;
+   }
+  });
+ }
+ // Invasão mais funda que a própria casca: recolher atravessaria o corpo, então o
+ // trecho (coberto pela roupa, pois o raio a atingiu) é ocultado.
+ // Recolher muito distorce a malha (triângulos esticados): invasões profundas também são ocultadas.
+ for(let k=0;k<groups;k++)if(push[k]>thickness[k]*.75||push[k]>BODY_HIDE_DEPTH){hidden[k]=1;push[k]=Math.min(push[k],thickness[k]*.75,BODY_HIDE_DEPTH)}
+ // Expande levemente o recolhimento para os vizinhos (borda suave, sem degraus).
+ let cur=push;
+ for(let it=0;it<BODY_FEATHER;it++){
+  const next=cur.slice();
+  for(let k=0;k<groups;k++){
+   const nb=neighbors[k];if(!nb.length)continue;
+   let s=0,c=0;for(let j=0;j<nb.length;j++){const v=cur[nb[j]];if(v>0){s+=v;c++}}
+   if(!c)continue;
+   // Vértice cercado de vizinhos recolhidos (furo na malha da roupa): acompanha-os.
+   // Na borda da peça, só uma transição suave e mais rasa.
+   const m=c*2>=nb.length?s/c:s/nb.length*.6;
+   if(m>next[k])next[k]=m;
+  }
+  cur=next;
+ }
+ const required=new Float32Array(groups);
+ // Picos isolados (raio que acertou um fragmento solto da roupa) são rebaixados e o
+ // campo é alisado para o corpo recolher como uma superfície contínua.
+ for(let k=0;k<groups;k++){
+  if(!cur[k])continue;const list=neighbors[k];let c=0,s=0;
+  for(let j=0;j<list.length;j++){const v=cur[list[j]];if(v>0)c++;s+=v}
+  if(list.length&&c*4<list.length)cur[k]=Math.min(cur[k],s/list.length+BODY_GAP);
+ }
+ required.set(cur.map((v,k)=>push[k]>0?Math.min(v,push[k]):0));
+ for(let it=0;it<3;it++){
+  const next=cur.slice();
+  for(let k=0;k<groups;k++){const list=neighbors[k];if(!list.length)continue;let s=0;for(let j=0;j<list.length;j++)s+=cur[list[j]];next[k]=Math.max(cur[k]*.5+s/list.length*.5,cur[k]*.8)}
+  cur=next;
+ }
+ // O alisamento nunca deixa um vértice detectado menos recolhido do que o raio exigiu.
+ for(let k=0;k<groups;k++)if(required[k]>cur[k])cur[k]=required[k];
+ const arr=pos.array;
+ for(let k=0;k<groups;k++)cur[k]=Math.min(cur[k],thickness[k]*.75);
+ // Verificação final: vértice que a roupa cobre mas que, recolhido, ainda não ficou
+ // por dentro dela (rebordos/juntas do manequim com normal quase tangente) é ocultado.
+ for(let k=0;k<groups;k++){
+  if(!(required[k]>0)||hidden[k])continue;
+  const nx=gN[k*3],ny=gN[k*3+1],nz=gN[k*3+2],a=cur[k];
+  const qx=gPos[k*3]-nx*a,qy=gPos[k*3+1]-ny*a,qz=gPos[k*3+2]-nz*a;
+  let inside=false;
+  for(const t of tests){
+   o.set(qx,qy,qz).applyMatrix4(t.toGarment);
+   d.set(qx+nx*(a+BODY_GAP*2),qy+ny*(a+BODY_GAP*2),qz+nz*(a+BODY_GAP*2)).applyMatrix4(t.toGarment);
+   const far=d.distanceTo(o);if(!far)continue;
+   ray.origin.copy(o);ray.direction.copy(d).sub(o).divideScalar(far);
+   if(t.bvh.raycastFirst(ray,THREE.DoubleSide,0,far)){inside=true;break}
+  }
+  if(!inside)hidden[k]=1;
+ }
+ for(let i=0;i<pos.count;i++){const g=groupOf[i],a=cur[g];arr[i*3]=rest[i*3]-gN[g*3]*a;arr[i*3+1]=rest[i*3+1]-gN[g*3+1]*a;arr[i*3+2]=rest[i*3+2]-gN[g*3+2]*a}
+ pos.needsUpdate=true;mesh.geometry.computeBoundingSphere();
+ if(restIndex){
+  // Triângulos que tocam um vértice oculto saem do desenho (ficam sob a roupa).
+  const out=new restIndex.constructor(restIndex.length);let m=0;
+  for(let t=0;t<restIndex.length;t+=3){
+   const a=restIndex[t],b=restIndex[t+1],c=restIndex[t+2];
+   if(hidden[groupOf[a]]|hidden[groupOf[b]]|hidden[groupOf[c]])continue;
+   out[m++]=a;out[m++]=b;out[m++]=c;
+  }
+  mesh.geometry.index.array.set(out);mesh.geometry.setDrawRange(0,m);mesh.geometry.index.needsUpdate=true;
+ }
+}
 function disposeClone(obj){if(!obj)return;obj.traverse(c=>{if(c.isMesh){const mats=Array.isArray(c.material)?c.material:[c.material];mats.forEach(m=>m.dispose())}});root.remove(obj)}
 async function put(slot,stamp){
  const a=option(slot);disposeClone(attached[slot]);attached[slot]=null;requestDraw();
@@ -153,7 +324,7 @@ async function put(slot,stamp){
  }catch(err){console.error('DOTH GLB',a.key,err);status('MODELO '+a.key+' NÃO CARREGOU');}
 }
 function emit(slot){const a=option(slot);send('selection',{slot,item:a.key?{id:a.id,mode:a.mode}:null})}
-async function refresh(){const stamp=++revision;drawSelectors();if(!ready)return;status('CARREGANDO PEÇAS 3D…');await Promise.all(slots.map(slot=>put(slot,stamp)));if(stamp===revision)status('');requestDraw()}
+async function refresh(){const stamp=++revision;drawSelectors();if(!ready)return;status('CARREGANDO PEÇAS 3D…');await Promise.all(slots.map(slot=>put(slot,stamp)));if(stamp===revision){try{conformBody()}catch(err){console.error('DOTH ajuste corpo',err)}status('')}requestDraw()}
 function select(slot,direction){selected[slot]=(selected[slot]+direction+options[slot].length)%options[slot].length;if(slot==='full'&&selected.full){selected.top=0;selected.bottom=0}if((slot==='top'||slot==='bottom')&&selected[slot])selected.full=0;refresh();emit(slot);if(slot==='full'&&selected.full){emit('top');emit('bottom')}else if(slot==='top'||slot==='bottom')emit('full')}
 el('selectors').addEventListener('click',e=>{const b=e.target.closest('[data-slot]');if(b)select(b.dataset.slot,Number(b.dataset.dir))});
 function applyParentLook(look){if(!look)return;for(const slot of slots){const p=look[slot];const index=options[slot].findIndex(a=>p&&a.id===p.id&&a.mode===p.mode);selected[slot]=index>=0?index:0}refresh()}
@@ -176,5 +347,5 @@ el('reset').onclick=resetCamera;
 document.addEventListener('visibilitychange',()=>{visible=!document.hidden;if(visible)requestDraw();else{cancelAnimationFrame(raf);raf=0}});
 window.addEventListener('resize',()=>{if(renderer){renderer.setPixelRatio(Math.min(devicePixelRatio||1,innerWidth<700?1.25:1.5));size();requestDraw()}});
 drawSelectors();
-if(init()){try{const man=positionModel(await asset('mannequin'),'mannequin');root.add(man);status('');requestDraw();send('ready');await refresh()}catch(err){console.error(err);status('MANEQUIM NÃO CARREGOU');el('fallback').style.display='flex'}}
+if(init()){try{const man=positionModel(await asset('mannequin'),'mannequin');prepareBody(man);root.add(man);status('');requestDraw();send('ready');await refresh()}catch(err){console.error(err);status('MANEQUIM NÃO CARREGOU');el('fallback').style.display='flex'}}
 </script></body></html>
