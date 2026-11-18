@@ -68,15 +68,15 @@ const SOURCE_MANNEQUIN_HEIGHT=0.979522705078125;
 const garmentFit={
  // Uniform scales tested with original GLBs in frontal and side views.
  // Shift jacket back without losing the natural, wide shoulder fit.
- jacket_cream:{s:.52,y:.38,z:-.003},
+ jacket_cream:{s:.465,referenceScale:.52,y:.38,z:-.009,anchor:'collar'},
  // Keep approved trousers unchanged.
  pants_cargo:{s:.56,y:0,z:0},
  pants_black:{s:.53,y:.005,z:0},
  overalls_cream:{s:.82,y:.022,z:.005},
  // Cap calibration now uses the measured head silhouette, not guessed mannequin-height multipliers.
- cap_camo:{turn:0,width:1.19,front:.07},
- cap_plaid:{turn:0,width:1.19,front:.07},
- cap_leopard:{turn:Math.PI,width:1.19,front:.07}
+ cap_camo:{turn:Math.PI,width:1.12,front:.07,crownDrop:.014},
+ cap_plaid:{turn:Math.PI,width:1.12,front:.07,crownDrop:.014},
+ cap_leopard:{turn:Math.PI,width:1.12,front:.07,crownDrop:.014}
 };
 function status(s){el('message').textContent=s;el('message').hidden=!s}
 function send(type,data){if(parent!==window)parent.postMessage(Object.assign({source:'doth-fitting-room',type},data||{}),location.origin)}
@@ -121,7 +121,7 @@ function positionModel(obj,slot){
   obj.position.x+=headCenter.x-capCenter.x;
   obj.position.z+=headCenter.z+headSize.z*fit.front-capCenter.z;
   // Coroa apenas acima do topo da cabeça; a aba se estende naturalmente à frente.
-  obj.position.y+=mannequinBounds.max.y+height*.009-capBox.max.y;
+  obj.position.y+=mannequinBounds.max.y-height*(fit.crownDrop??0)-capBox.max.y;
   return obj;
  }
  const bodySize=mannequinBounds.getSize(new THREE.Vector3());
@@ -136,6 +136,12 @@ function positionModel(obj,slot){
   mannequinBounds.min.y+bodySize.y*fit.y-sourceBox.min.y*uniform,
   bodyCenter.z-rotatedCenter.z+bodySize.y*fit.z/SOURCE_MANNEQUIN_HEIGHT
  );
+ if(fit.anchor==='collar'){
+  // Redimensionar a jaqueta sem derrubar a gola: preservar a altura de
+  // topo que tinha a calibração anterior e recolher a barra e as mangas.
+  const referenceUniform=bodySize.y/SOURCE_MANNEQUIN_HEIGHT*fit.referenceScale;
+  obj.position.y+=(sourceBox.max.y-sourceBox.min.y)*(referenceUniform-uniform);
+ }
  return obj;
 }
 function disposeClone(obj){if(!obj)return;obj.traverse(c=>{if(c.isMesh){const mats=Array.isArray(c.material)?c.material:[c.material];mats.forEach(m=>m.dispose())}});root.remove(obj)}
